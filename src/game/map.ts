@@ -1,192 +1,94 @@
-// Map template definitions — Phase 1.
-// Hand-designed territory graphs per GAME-DESIGN.md §5.
-// Pangaea is fully authored below; the other three templates are stubs for Phase 2.
-// Doctrine: zero random proc-gen — every position, adjacency, and prosperity value
-// on Pangaea is a deliberate authored decision.
+// Circle-territory maps — State.io-style.
+// Territories are plain circles scattered on the field (no adjacency graph:
+// in State.io you can send troops to ANY territory; distance = travel time).
+// Layouts are generated from the match seed: deterministic for a given seed,
+// fresh every match. Rejection sampling guarantees no overlaps.
 
-export interface TerritoryNode {
+import { mulberry32 } from './engine';
+
+export interface CircleTerritory {
   id: string;
-  name: string;
   x: number; // normalized 0..100
-  y: number; // normalized 0..62.5 (16:10 canvas)
-  prosperity: number; // troop tick multiplier, 0.6..1.6
-  neighbors: string[]; // adjacency by id (must be symmetric)
-  isBridge?: boolean; // Phase 2 (Twin Continents)
-  isStrait?: boolean; // Phase 2 (Archipelago / Shattered Isles)
+  y: number; // normalized 0..62.5 (16:10 field)
+  r: number; // normalized radius
 }
 
-export interface MapTemplate {
-  id: 'pangaea' | 'twin-continents' | 'archipelago' | 'shattered-isles';
-  displayName: string;
-  mode: 'blitz' | 'epic';
-  /** True while the template is a placeholder awaiting hand-authoring. */
-  stub?: boolean;
-  nodes: TerritoryNode[];
-}
+export const FIELD_W = 100;
+export const FIELD_H = 62.5;
 
-// ---------------------------------------------------------------------------
-// Template A — PANGAEA ("The First Continent")
-// 12 territories, Blitz default. One contiguous oval landmass:
-//   1 center  (Heartlands, 1.6x prosperity) — degree 5
-//   5 inner ring (1.0x) — degree 5
-//   6 outer ring (0.7x) — degree 3 (two ring neighbors + one inner)
-// Graph diameter: 4 hops. No chokepoints — pure expansion race.
-// 4 commanders start on the 4 diagonal outer territories, maximally separated.
-// ---------------------------------------------------------------------------
+const MIN_R = 3.4;
+const MAX_R = 5.2;
+const EDGE_GAP = 1.2; // minimum clear space between two circles
+const MARGIN = 6; // keep circles away from the field border
 
-const PANGAEA_NODES: TerritoryNode[] = [
-  // The Heartlands — the prize at the center.
-  {
-    id: 'heartlands',
-    name: 'Heartlands',
-    x: 50,
-    y: 31.25,
-    prosperity: 1.6,
-    neighbors: ['emberhold', 'vessalyne', 'duskmere', 'karthos', 'lyssara'],
-  },
-  // Inner ring (clockwise from the top).
-  {
-    id: 'emberhold',
-    name: 'Emberhold',
-    x: 50,
-    y: 18.25,
-    prosperity: 1.0,
-    neighbors: ['heartlands', 'vessalyne', 'lyssara', 'frostgate', 'saltspire'],
-  },
-  {
-    id: 'vessalyne',
-    name: 'Vessalyne',
-    x: 62.4,
-    y: 27.2,
-    prosperity: 1.0,
-    neighbors: ['heartlands', 'emberhold', 'duskmere', 'cinderfall'],
-  },
-  {
-    id: 'duskmere',
-    name: 'Duskmere',
-    x: 57.6,
-    y: 41.3,
-    prosperity: 1.0,
-    neighbors: ['heartlands', 'vessalyne', 'karthos', 'thornwatch'],
-  },
-  {
-    id: 'karthos',
-    name: 'Karthos',
-    x: 42.4,
-    y: 41.3,
-    prosperity: 1.0,
-    neighbors: ['heartlands', 'duskmere', 'lyssara', 'mistral'],
-  },
-  {
-    id: 'lyssara',
-    name: 'Lyssara',
-    x: 37.6,
-    y: 27.2,
-    prosperity: 1.0,
-    neighbors: ['heartlands', 'karthos', 'emberhold', 'gravehollow'],
-  },
-  // Outer ring (clockwise from the top).
-  {
-    id: 'frostgate',
-    name: 'Frostgate',
-    x: 50,
-    y: 6.25,
-    prosperity: 0.7,
-    neighbors: ['emberhold', 'cinderfall', 'saltspire'],
-  },
-  {
-    id: 'cinderfall',
-    name: 'Cinderfall',
-    x: 71.65,
-    y: 18.75,
-    prosperity: 0.7,
-    neighbors: ['frostgate', 'thornwatch', 'vessalyne'],
-  },
-  {
-    id: 'thornwatch',
-    name: 'Thornwatch',
-    x: 71.65,
-    y: 43.75,
-    prosperity: 0.7,
-    neighbors: ['cinderfall', 'mistral', 'duskmere'],
-  },
-  {
-    id: 'mistral',
-    name: 'Mistral',
-    x: 50,
-    y: 56.25,
-    prosperity: 0.7,
-    neighbors: ['thornwatch', 'gravehollow', 'karthos'],
-  },
-  {
-    id: 'gravehollow',
-    name: 'Gravehollow',
-    x: 28.35,
-    y: 43.75,
-    prosperity: 0.7,
-    neighbors: ['mistral', 'saltspire', 'lyssara'],
-  },
-  {
-    id: 'saltspire',
-    name: 'Saltspire',
-    x: 28.35,
-    y: 18.75,
-    prosperity: 0.7,
-    neighbors: ['gravehollow', 'frostgate', 'emberhold'],
-  },
-];
-
-/** Commander start territories on Pangaea: the 4 diagonal outers, maximally separated. */
-export const PANGAEA_START_IDS = [
-  'cinderfall',
-  'thornwatch',
-  'gravehollow',
-  'saltspire',
-] as const;
-
-export const MAP_TEMPLATES: Record<MapTemplate['id'], MapTemplate> = {
-  pangaea: {
-    id: 'pangaea',
-    displayName: 'Pangaea — The First Continent',
-    mode: 'blitz',
-    nodes: PANGAEA_NODES,
-  },
-  // Stubs — hand-authored in Phase 2 per GAME-DESIGN.md §5. Kept in the module
-  // graph now so mode/template selection code compiles against all four.
-  'twin-continents': {
-    id: 'twin-continents',
-    displayName: 'Twin Continents — Veyl & Morvain',
-    mode: 'blitz',
-    stub: true,
-    nodes: [],
-  },
-  archipelago: {
-    id: 'archipelago',
-    displayName: 'Archipelago — The Drowned Reaches',
-    mode: 'epic',
-    stub: true,
-    nodes: [],
-  },
-  'shattered-isles': {
-    id: 'shattered-isles',
-    displayName: 'Shattered Isles — The Breaking',
-    mode: 'epic',
-    stub: true,
-    nodes: [],
-  },
-};
-
-/** Debug helper: verifies every adjacency edge is symmetric. */
-export function validateTemplate(t: MapTemplate): string[] {
-  const errors: string[] = [];
-  const byId = new Map(t.nodes.map((n) => [n.id, n]));
-  for (const n of t.nodes) {
-    for (const nb of n.neighbors) {
-      const other = byId.get(nb);
-      if (!other) errors.push(`${n.id} -> missing node ${nb}`);
-      else if (!other.neighbors.includes(n.id))
-        errors.push(`${n.id} -> ${nb} not symmetric`);
-    }
+/**
+ * Generate `count` non-overlapping circles from `seed`.
+ * Deterministic: the same seed always yields the same layout.
+ * The edge gap relaxes automatically on stubborn seeds so generation
+ * never fails at runtime.
+ */
+export function generateMap(seed: number, count = 22): CircleTerritory[] {
+  for (const gap of [EDGE_GAP, 0.8, 0.4, 0]) {
+    const circles = tryPlace(seed, count, gap);
+    if (circles) return circles;
   }
-  return errors;
+  throw new Error(`generateMap: could not place ${count} circles (seed ${seed})`);
+}
+
+function tryPlace(
+  seed: number,
+  count: number,
+  gap: number,
+): CircleTerritory[] | null {
+  const rng = mulberry32(seed ^ 0x9e3779b9);
+  const circles: CircleTerritory[] = [];
+  let attempts = 0;
+  let i = 0;
+  while (i < count && attempts < 6000) {
+    attempts++;
+    const r = MIN_R + rng() * (MAX_R - MIN_R);
+    const x = MARGIN + r + rng() * (FIELD_W - 2 * (MARGIN + r));
+    const y = MARGIN + r + rng() * (FIELD_H - 2 * (MARGIN + r));
+    let ok = true;
+    for (const c of circles) {
+      const d = Math.hypot(c.x - x, c.y - y);
+      if (d < c.r + r + gap) {
+        ok = false;
+        break;
+      }
+    }
+    if (!ok) continue;
+    circles.push({ id: `t${i}`, x, y, r });
+    i++;
+  }
+  return circles.length === count ? circles : null;
+}
+
+/**
+ * Pick `n` start circles maximally separated from each other
+ * (greedy farthest-point sampling), so commanders begin far apart.
+ */
+export function pickStarts(circles: CircleTerritory[], n: number, seed: number): string[] {
+  const rng = mulberry32(seed ^ 0x51ed2703);
+  const picked: CircleTerritory[] = [];
+  const first = circles[Math.floor(rng() * circles.length)];
+  picked.push(first);
+  while (picked.length < n) {
+    let best: CircleTerritory | null = null;
+    let bestScore = -1;
+    for (const c of circles) {
+      if (picked.includes(c)) continue;
+      let minD = Infinity;
+      for (const p of picked) minD = Math.min(minD, Math.hypot(c.x - p.x, c.y - p.y));
+      // Slight jitter so the same seed doesn't always pick identical spreads.
+      const score = minD + rng() * 4;
+      if (score > bestScore) {
+        bestScore = score;
+        best = c;
+      }
+    }
+    if (!best) break;
+    picked.push(best);
+  }
+  return picked.map((c) => c.id);
 }

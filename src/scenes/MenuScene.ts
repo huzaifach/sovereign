@@ -6,7 +6,7 @@ const DIFFICULTIES: BotTier[] = ['recruit', 'veteran', 'sovereign'];
 
 const BLURBS: Record<BotTier, string> = {
   recruit: 'Learn the ropes — the Eager Lieutenant blunders.',
-  veteran: 'The real game — the Warden holds the line.',
+  veteran: 'The real game — the Warden never misses.',
   sovereign: 'The wall — the Namesake shows no mercy.',
 };
 
@@ -121,7 +121,7 @@ export class MenuScene extends Phaser.Scene {
     });
 
     this.add
-      .text(cx, h - 64, 'Drag from your lands to a neighboring land to send troops.', {
+      .text(cx, h - 64, 'Tap your circle, then tap any target — every troop marches. Conquer them all.', {
         fontFamily: '"Spectral", serif',
         fontSize: '16px',
         color: THEME_CSS.muted,

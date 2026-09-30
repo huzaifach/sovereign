@@ -1,5 +1,5 @@
 // SOVEREIGN v2 — Phaser 3 + TypeScript + Vite.
-// Pure game logic lives in src/game/* (engine, bots, map, edicts, shapes, theme)
+// Pure game logic lives in src/game/* (engine, bots, map, theme)
 // with zero Phaser dependency: deterministic and headless-testable.
 // Phaser owns scenes, rendering, input, particles, and UI.
 

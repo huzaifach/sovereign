@@ -1,17 +1,14 @@
-// Deterministic simulation core — Phase 1.
-// Tick-based troop growth, send/attack resolution, elimination, scoring.
-// 100% deterministic given (seed, actionLog): fixed timestep, seeded RNG only at
-// setup, integer troop math, no wall-clock or Math.random anywhere in the sim.
+// Simulation core — State.io-exact mechanics.
+// - Territories are circles; any territory can target any other (no adjacency).
+// - Tap/drag from your circle sends ALL of its troops ("the territory left
+//   behind will reset to zero"); they march as individual dots in a stream.
+// - Each arriving dot fights 1:1: it kills one defender, reinforces one friend,
+//   or captures an empty/neutral circle (first dot claims it, rest reinforce).
+// - Owned circles regenerate +1 troop per growthIntervalMs up to maxTroops.
+//   Neutral circles never regenerate.
+// - Win: own every circle. Lose: own none.
 
-import { MAP_TEMPLATES, type MapTemplate } from './map';
-import type { BotTier } from './bots';
-import {
-  defenseBonus,
-  growthMultiplier,
-  updateEdicts,
-  type ActiveEdict,
-  type PendingPlague,
-} from './edicts';
+import { generateMap, pickStarts, type CircleTerritory } from './map';
 
 export type OwnerId = string; // commander id, or NEUTRAL
 export const NEUTRAL: OwnerId = 'neutral';
@@ -19,51 +16,49 @@ export const NEUTRAL: OwnerId = 'neutral';
 export interface SimConfig {
   seed: number;
   tickMs: number; // fixed sim step (100ms)
-  homeAdvantage: number; // defender multiplier, e.g. 0.10
-  growthIntervalMs: number; // 3000 Blitz — one growth pulse per territory
-  streamSpeed: number; // world units per second of troop-stream travel
-  startingTroops: number; // capital garrison at match start (12)
+  growthIntervalMs: number; // 1500 — owned-circle regen pulse
+  maxTroops: number; // regen cap per circle (99)
+  dotSpeed: number; // world units per second of dot travel
+  staggerMs: number; // gap between consecutive dots of one send (45)
+  startingTroops: number; // opening garrison per commander (10)
 }
 
-/** Blitz tuning per GAME-DESIGN.md §7. */
-export function blitzConfig(seed: number): SimConfig {
+export function defaultConfig(seed: number): SimConfig {
   return {
     seed,
     tickMs: 100,
-    homeAdvantage: 0.1,
-    growthIntervalMs: 3000,
-    streamSpeed: 45,
-    startingTroops: 12,
+    growthIntervalMs: 1500,
+    maxTroops: 99,
+    dotSpeed: 26,
+    staggerMs: 45,
+    startingTroops: 10,
   };
-}
-
-export interface SendAction {
-  tick: number;
-  from: string;
-  to: string;
-  fraction: 1 | 0.5;
-  owner: OwnerId;
 }
 
 export interface TerritoryState {
   id: string;
+  x: number;
+  y: number;
+  r: number;
   owner: OwnerId;
   troops: number; // integer, always >= 0
-  growthFrac: number; // fractional growth accumulator (deterministic)
-  prosperity: number; // copied from the map node
-  isCapital: boolean;
-  /** Wall-sim timestamp until which the renderer pulses the under-attack ring. */
+  /** Wall-ms timestamp until which the renderer pulses the under-attack ring. */
   underAttackUntilMs: number;
 }
 
-export interface StreamState {
+/** One marching troop. Position is derived from timeMs (no integration). */
+export interface DotState {
   id: number;
   owner: OwnerId;
-  from: string;
-  to: string;
-  troops: number;
+  targetId: string;
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
   departMs: number;
   arriveMs: number;
+  /** Fixed lateral offset (world units) so streams don't perfectly overlap. */
+  lat: number;
 }
 
 export interface CommanderState {
@@ -71,7 +66,6 @@ export interface CommanderState {
   name: string;
   colorIdx: number;
   isBot: boolean;
-  tier: BotTier | null;
   alive: boolean;
   eliminations: number;
 }
@@ -80,32 +74,24 @@ export type MatchStatus = 'running' | 'won' | 'lost';
 
 export interface GameState {
   config: SimConfig;
-  map: MapTemplate;
+  circles: CircleTerritory[];
   tick: number;
   timeMs: number;
-  /** Fractional-ms accumulator for fixed-step advancement. */
   accMs: number;
   territories: TerritoryState[];
   terrById: Record<string, TerritoryState>;
-  adj: Record<string, string[]>;
-  streams: StreamState[];
+  dots: DotState[];
   commanders: CommanderState[];
   playerId: OwnerId;
-  actionLog: SendAction[];
   status: MatchStatus;
   winnerId: OwnerId | null;
   endTimeMs: number | null;
-  nextStreamId: number;
-  // Edicts (GAME-DESIGN.md §17) — timed god-powers, one active per commander.
-  edicts: ActiveEdict[];
-  /** `${owner}:${edictType}` -> wall-ms timestamp when the cooldown ends. */
-  edictCooldowns: Record<string, number>;
-  pendingPlagues: PendingPlague[];
-  /** territoryId -> wall-ms until which the plague telegraph renders. */
-  plagueMarks: Record<string, number>;
+  nextDotId: number;
+  /** Deterministic RNG for cosmetic sim randomness (dot wobble). */
+  rng: () => number;
 }
 
-// mulberry32 — deterministic RNG shared by sim + bots.
+// mulberry32 — seeded RNG.
 export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return () => {
@@ -132,123 +118,108 @@ export interface CommanderSetup {
   name: string;
   colorIdx: number;
   isBot: boolean;
-  tier: BotTier | null;
 }
 
 /**
- * Build a fresh match. `startTerritoryIds[i]` is the capital of `commanders[i]`.
- * Everything else starts neutral with a seeded army (4–8, scaled by prosperity).
+ * Build a fresh match. Commanders start on maximally-separated circles with
+ * `startingTroops` each; everything else is neutral with a seeded garrison.
  */
 export function createGame(
-  mapId: MapTemplate['id'],
   config: SimConfig,
   commanders: CommanderSetup[],
-  startTerritoryIds: string[],
   playerId: OwnerId,
+  circleCount = 22,
 ): GameState {
-  const map = MAP_TEMPLATES[mapId];
-  const rng = mulberry32(config.seed);
+  const circles = generateMap(config.seed, circleCount);
+  const starts = pickStarts(circles, commanders.length, config.seed);
+  const rng = mulberry32(config.seed ^ 0x1234abcd);
+
   const terrById: Record<string, TerritoryState> = {};
-  const adj: Record<string, string[]> = {};
-  const territories: TerritoryState[] = map.nodes.map((n) => {
+  const territories: TerritoryState[] = circles.map((c) => {
+    // Neutral garrison 5–15, slightly higher on bigger circles.
+    const troops = Math.round(5 + rng() * 8 + (c.r - 4) * 1.2);
     const t: TerritoryState = {
-      id: n.id,
+      id: c.id,
+      x: c.x,
+      y: c.y,
+      r: c.r,
       owner: NEUTRAL,
-      // Neutral garrison: 4–8, scaled by prosperity (richer land costs more).
-      troops: Math.max(
-        4,
-        Math.min(8, Math.round(4 + n.prosperity * 2.5 + (rng() - 0.5) * 1.5)),
-      ),
-      growthFrac: 0,
-      prosperity: n.prosperity,
-      isCapital: false,
+      troops,
       underAttackUntilMs: 0,
     };
-    terrById[n.id] = t;
-    adj[n.id] = [...n.neighbors];
+    terrById[c.id] = t;
     return t;
   });
 
   commanders.forEach((c, i) => {
-    const cap = terrById[startTerritoryIds[i]];
-    cap.owner = c.id;
-    cap.troops = config.startingTroops;
-    cap.isCapital = true;
+    const t = terrById[starts[i]];
+    t.owner = c.id;
+    t.troops = config.startingTroops;
   });
 
   return {
     config,
-    map,
+    circles,
     tick: 0,
     timeMs: 0,
     accMs: 0,
     territories,
     terrById,
-    adj,
-    streams: [],
+    dots: [],
     commanders: commanders.map((c) => ({ ...c, alive: true, eliminations: 0 })),
     playerId,
-    actionLog: [],
     status: 'running',
     winnerId: null,
     endTimeMs: null,
-    nextStreamId: 1,
-    edicts: [],
-    edictCooldowns: {},
-    pendingPlagues: [],
-    plagueMarks: {},
+    nextDotId: 1,
+    rng: mulberry32(config.seed ^ 0x77aa55cc),
   };
 }
 
 /**
- * Troops moved by a send: floor(army × fraction), minimum 1, source always
- * retains at least 1 (a territory can never be emptied — deliberate simplification).
- */
-export function sendAmount(troops: number, fraction: 1 | 0.5): number {
-  if (troops < 2) return 0;
-  return Math.max(1, Math.min(troops - 1, Math.floor(troops * fraction)));
-}
-
-/**
- * Queue a troop stream. Returns false if the send is illegal
- * (wrong owner, non-adjacent, too few troops, dead commander, match over).
+ * Send EVERY troop from `fromId` to `toId` as a staggered stream of dots.
+ * The source resets to zero — exactly like State.io.
+ * Returns false if illegal (wrong owner, no troops, dead commander, over).
  */
 export function issueSend(
   state: GameState,
   owner: OwnerId,
   fromId: string,
   toId: string,
-  fraction: 1 | 0.5,
 ): boolean {
   if (state.status !== 'running') return false;
+  if (fromId === toId) return false;
   const from = state.terrById[fromId];
   const to = state.terrById[toId];
   if (!from || !to) return false;
   if (from.owner !== owner) return false;
-  if (!state.adj[fromId]?.includes(toId)) return false;
+  if (from.troops < 1) return false;
   const me = state.commanders.find((c) => c.id === owner);
   if (!me || !me.alive) return false;
-  const amount = sendAmount(from.troops, fraction);
-  if (amount < 1) return false;
 
-  from.troops -= amount;
-  const a = state.map.nodes.find((n) => n.id === fromId);
-  const b = state.map.nodes.find((n) => n.id === toId);
-  const dist = a && b ? Math.hypot(a.x - b.x, a.y - b.y) : 10;
+  const n = from.troops;
+  from.troops = 0;
+
+  const dist = Math.hypot(to.x - from.x, to.y - from.y);
   const travelMs = Math.max(
     state.config.tickMs,
-    (dist / state.config.streamSpeed) * 1000,
+    (dist / state.config.dotSpeed) * 1000,
   );
-  state.streams.push({
-    id: state.nextStreamId++,
-    owner,
-    from: fromId,
-    to: toId,
-    troops: amount,
-    departMs: state.timeMs,
-    arriveMs: state.timeMs + travelMs,
-  });
-  state.actionLog.push({ tick: state.tick, from: fromId, to: toId, fraction, owner });
+  for (let i = 0; i < n; i++) {
+    const departMs = state.timeMs + i * state.config.staggerMs;
+    state.dots.push({
+      id: state.nextDotId++,
+      owner,
+      targetId: toId,
+      x0: from.x,
+      y0: from.y,
+      x1: to.x,
+      y1: to.y,
+      departMs,
+      arriveMs: departMs + travelMs,
+      lat: (state.rng() - 0.5) * 1.8,
+    });
+  }
   return true;
 }
 
@@ -265,91 +236,82 @@ function advanceTick(state: GameState): void {
   state.tick += 1;
   state.timeMs += state.config.tickMs;
 
-  updateEdicts(state);
-
-  // Growth pulse: every owned (commander) territory accrues
-  // prosperity × (capital ? 2 : 1) × edict multiplier per growthIntervalMs.
+  // Regen pulse: every owned circle +1 troop, up to the cap.
   if (state.timeMs % state.config.growthIntervalMs === 0) {
     for (const t of state.territories) {
       if (t.owner === NEUTRAL) continue;
-      t.growthFrac +=
-        t.prosperity * (t.isCapital ? 2 : 1) * growthMultiplier(state, t.owner);
-      const whole = Math.floor(t.growthFrac);
-      if (whole > 0) {
-        t.troops += whole;
-        t.growthFrac -= whole;
-      }
+      if (t.troops < state.config.maxTroops) t.troops += 1;
     }
   }
 
-  // Resolve arrivals due this tick (stable order: earliest depart first).
-  if (state.streams.length > 0) {
-    const due = state.streams.filter((s) => s.arriveMs <= state.timeMs);
+  // Resolve arrived dots (earliest departure first — fair 1:1 fights).
+  if (state.dots.length > 0) {
+    const due = state.dots.filter((d) => d.arriveMs <= state.timeMs);
     if (due.length > 0) {
-      due.sort((x, y) => x.departMs - y.departMs || x.id - y.id);
-      const dueIds = new Set(due.map((s) => s.id));
-      state.streams = state.streams.filter((s) => !dueIds.has(s.id));
-      for (const s of due) resolveArrival(state, s);
+      due.sort((a, b) => a.departMs - b.departMs || a.id - b.id);
+      const dueIds = new Set(due.map((d) => d.id));
+      state.dots = state.dots.filter((d) => !dueIds.has(d.id));
+      for (const d of due) resolveDot(state, d);
     }
   }
 
   checkEnd(state);
 }
 
-function resolveArrival(state: GameState, s: StreamState): void {
-  const target = state.terrById[s.to];
+function resolveDot(state: GameState, d: DotState): void {
+  const target = state.terrById[d.targetId];
   if (!target) return;
+  const ownerAlive = state.commanders.find((c) => c.id === d.owner)?.alive;
+  if (!ownerAlive) return; // eliminated mid-flight: the dot fizzles
 
-  // Reinforcement: streams into own territory just add troops.
-  if (target.owner === s.owner) {
-    target.troops += s.troops;
+  if (target.owner === d.owner) {
+    target.troops += 1; // reinforcement
     return;
   }
-
-  const prevOwner = target.owner;
-  const effDef = Math.floor(
-    target.troops *
-      (1 + state.config.homeAdvantage + defenseBonus(state, target.owner)),
-  );
-  if (s.troops > effDef) {
-    // Capture: remainder holds the territory.
-    target.owner = s.owner;
-    target.troops = Math.max(1, s.troops - effDef);
-    target.isCapital = false;
-    target.underAttackUntilMs = state.timeMs + 1200;
-    if (prevOwner !== NEUTRAL) {
-      const victim = state.commanders.find((c) => c.id === prevOwner);
-      const killer = state.commanders.find((c) => c.id === s.owner);
-      if (victim && state.territories.every((t) => t.owner !== prevOwner)) {
-        victim.alive = false;
-        if (killer) killer.eliminations += 1;
-      }
-    }
+  if (target.troops > 0) {
+    target.troops -= 1; // 1:1 trade — the dot dies killing one defender
+    target.underAttackUntilMs = state.timeMs + 900;
   } else {
-    // Failed attack: defender keeps the raw difference.
-    target.troops = Math.max(0, target.troops - s.troops);
-    target.underAttackUntilMs = state.timeMs + 1200;
+    // Capture: the dot claims the circle.
+    const prevOwner = target.owner;
+    target.owner = d.owner;
+    target.troops = 1;
+    target.underAttackUntilMs = state.timeMs + 900;
+    if (prevOwner !== NEUTRAL) eliminateIfWiped(state, prevOwner, d.owner);
   }
 }
 
+/** A commander holding no circles is eliminated; their dots vanish. */
+function eliminateIfWiped(
+  state: GameState,
+  victimId: OwnerId,
+  killerId: OwnerId,
+): void {
+  const victim = state.commanders.find((c) => c.id === victimId);
+  if (!victim || !victim.alive) return;
+  if (state.territories.some((t) => t.owner === victimId)) return;
+  victim.alive = false;
+  state.dots = state.dots.filter((d) => d.owner !== victimId);
+  const killer = state.commanders.find((c) => c.id === killerId);
+  if (killer) killer.eliminations += 1;
+}
+
 function checkEnd(state: GameState): void {
+  if (state.status !== 'running') return;
   const player = state.commanders.find((c) => c.id === state.playerId);
   if (!player) return;
-  if (state.status === 'won') return;
-
-  if (!player.alive && state.status === 'running') {
+  if (!player.alive) {
     state.status = 'lost';
     state.endTimeMs = state.timeMs;
+    const rest = state.commanders.filter((c) => c.alive);
+    if (rest.length === 1) state.winnerId = rest[0].id;
+    return;
   }
-  const botsAlive = state.commanders.filter((c) => c.isBot && c.alive);
-  const commandersAlive = state.commanders.filter((c) => c.alive);
-  if (player.alive && botsAlive.length === 0 && state.status === 'running') {
+  const botsAlive = state.commanders.some((c) => c.isBot && c.alive);
+  if (!botsAlive) {
     state.status = 'won';
     state.winnerId = player.id;
     state.endTimeMs = state.timeMs;
-  } else if (state.status === 'lost' && commandersAlive.length === 1) {
-    // Spectated endgame resolved.
-    state.winnerId = commandersAlive[0].id;
   }
 }
 
@@ -381,7 +343,7 @@ export interface ScoreBreakdown {
   won: boolean;
 }
 
-/** Blitz scoring per GAME-DESIGN.md §7. Time bonus is paid on victory only. */
+/** Blitz scoring. Time bonus is paid on victory only. */
 export function computeScore(state: GameState, playerId: OwnerId): ScoreBreakdown {
   const me = commanderById(state, playerId);
   const territories = territoriesOf(state, playerId).length;
