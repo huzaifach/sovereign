@@ -1,0 +1,60 @@
+/* SOVEREIGN v2 — obsidian + sovereign gold theme.
+   Display/body fonts are vendored OFL files (see ASSETS-LICENSES.md). */
+
+@font-face {
+  font-family: 'Cinzel';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('/assets/fonts/cinzel-700-900.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Cinzel';
+  font-weight: 900;
+  font-style: normal;
+  font-display: swap;
+  src: url('/assets/fonts/cinzel-700-900.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Spectral';
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+  src: url('/assets/fonts/spectral-400.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Spectral';
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+  src: url('/assets/fonts/spectral-600.woff2') format('woff2');
+}
+@font-face {
+  font-family: 'Spectral';
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url('/assets/fonts/spectral-700.woff2') format('woff2');
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  background: #07070d;
+  overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+#app {
+  width: 100vw;
+  height: 100dvh;
+}
+
+#app canvas {
+  display: block;
+}
