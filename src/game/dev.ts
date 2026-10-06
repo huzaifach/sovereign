@@ -59,7 +59,12 @@ export function devLog(tag: DevTag, msg: string): void {
   if (!isDev()) return;
   events.push({ t: stamp(), tag, msg });
   if (events.length > MAX_EVENTS) events.shift();
+  // An actual error auto-opens the (hidden-by-default) panel so it is seen.
+  if (tag === 'error') panelAutoOpen = true;
 }
+
+// Set when an error is logged; the overlay opens the panel on its next update.
+let panelAutoOpen = false;
 
 export function devEvents(): DevEvent[] {
   return events;
@@ -408,6 +413,12 @@ class DevOverlay extends Phaser.Scene {
     this.lastT = now;
     this.lastFrameT = now; // heartbeat — the watchdog interval reads this
     if (!isDev()) return;
+
+    // Error auto-open: the panel stays hidden during clean play; an error pops it.
+    if (panelAutoOpen && !this.panelOpen) {
+      panelAutoOpen = false;
+      this.togglePanel();
+    }
 
     // Scene-transition events (no hooks inside game scenes needed).
     const keys = this.activeKeys();
