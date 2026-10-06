@@ -1,11 +1,11 @@
 # SOVEREIGN — Game Design Document
 
-**Version:** 2.0 (State.io-clone rebuild) — 30 September 2026
+**Version:** 1.1 (Stack v2) — 30 September 2026
 **Genre:** Minimalist real-time conquest strategy
 **Platforms:** Web — responsive mobile + desktop (touch + mouse)
 **Tech:** Phaser 3.90 + TypeScript + Vite (WebGL) · Kenney CC0 assets + Google Fonts (OFL) · Supabase (Postgres + Auth) backend · Vercel hosting (all free tiers)
-**Status:** v2.0 REBUILT, DEPLOYED & LIVE-VERIFIED — https://sovereign-eta-ecru.vercel.app (30 Sep 2026 ~19:56 PKT).
-**Changelog:** v2.0 — on Huzaifa's direction ("working, mechanics everything else must be exact clone", our design + name kept), the v1.x polygon/Edicts game was replaced: 22 seeded non-overlapping circular territories; send-ALL troops as individually timed marching dots; sequential 1:1 dot combat; owned-only +1/1.5s regen (cap 99); neutrals static until captured; tap-tap and drag-to-send; aggressive expansion bots (3 tiers). Deleted: `edicts.ts`, `shapes.ts`, ability cards, score/pts. v1.1 — vanilla Canvas stack replaced with Phaser 3 (§18); Edicts (§17) — SUPERSEDED by v2.0. Note: §§ below describing polygons/Edicts/scores are v1.x legacy; v2.0 mechanics are authoritative in code (`src/game/`).
+**Status:** Stack v2 foundation built (Boot/Menu/Game/GameOver scenes, Pangaea, 1 bot tier, Edicts). Playable polish next.
+**Changelog:** v1.1 — vanilla Canvas stack replaced with Phaser 3 (§18); new signature mechanic: Edicts (§17). All mechanics, numbers, and economy from v1.0 unchanged.
 
 ---
 
